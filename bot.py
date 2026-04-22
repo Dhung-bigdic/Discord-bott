@@ -226,7 +226,7 @@ WORD_LIST = {
         "honest", "hugely", "hunger", "hurtle", "hustle", "hybrid", "hypnot", "ignite", "immune", "impact",
         "insane", "insect", "invade", "invoke", "island", "jagged", "jammed", "jangle", "jaunty", "jigsaw",
         "joyful", "joyous", "jumble", "kernel", "kettle", "kindle", "kingly", "knight", "latest", "lather",
-        "lavish", "lawyer", "lively", "loathe", "locust", "lonely", "loosen", "loudly", "lovely", "lucent"'
+        "lavish", "lawyer", "lively", "loathe", "locust", "lonely", "loosen", "loudly", "lovely", "lucent",
         "lugged", "luster", "magnet", "manage", "marble", "market", "meadow", "midday", "mingle", "mishap",
         "missed", "modern", "modest", "module", "monkey", "mosaic", "motley", "muster", "myself", "mythic",
         "narrow", "nearly", "neatly", "nibble", "nickel", "nimble", "noodle", "normal", "nudged", "nuzzle",
