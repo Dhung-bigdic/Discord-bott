@@ -6,8 +6,10 @@ import os
 from datetime import datetime
 
 # ─── CẤU HÌNH ────────────────────────────────────────────────
-# Token lấy từ Railway Variables (key: TOKEN)
-TOKEN = os.environ.get("TOKEN")
+# Token — đọc cả TOKEN lẫn DISCORD_TOKEN
+TOKEN = os.environ.get("TOKEN") or os.environ.get("DISCORD_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ Không tìm thấy TOKEN! Hãy đặt biến TOKEN hoặc DISCORD_TOKEN trong Railway Variables.")
 
 MAX_GUESSES = 6
 
@@ -224,9 +226,9 @@ WORD_LIST = {
         "honest", "hugely", "hunger", "hurtle", "hustle", "hybrid", "hypnot", "ignite", "immune", "impact",
         "insane", "insect", "invade", "invoke", "island", "jagged", "jammed", "jangle", "jaunty", "jigsaw",
         "joyful", "joyous", "jumble", "kernel", "kettle", "kindle", "kingly", "knight", "latest", "lather",
-        "lavish", "lawyer", "lively", "loathe", "locust", "lonely", "loosen", "loudly", "lovely", "lucent",
+        "lavish", "lawyer", "lively", "loathe", "locust", "lonely", "loosen", "loudly", "lovely", "lucent"'
         "lugged", "luster", "magnet", "manage", "marble", "market", "meadow", "midday", "mingle", "mishap",
-        "missed", "modern", "modest", "motley", "muster", "myself", "mythic",
+        "missed", "modern", "modest", "module", "monkey", "mosaic", "motley", "muster", "myself", "mythic",
         "narrow", "nearly", "neatly", "nibble", "nickel", "nimble", "noodle", "normal", "nudged", "nuzzle",
         "obtain", "oddity", "office", "onward", "opaque", "orange", "orchid", "ordeal", "output", "oyster",
         "painty", "palace", "patrol", "patter", "pillar", "pirate", "placid", "plague", "planet", "plenty",
@@ -281,6 +283,7 @@ WORD_LIST = {
         "western", "whereas", "wishing", "wonders", "working", "written", "younger",
     ],
 }
+
 GREEN  = "🟩"
 YELLOW = "🟨"
 BLACK  = "⬛"
@@ -421,6 +424,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# thread_id -> user_id (để biết thread nào của ai)
+thread_games: dict[int, int] = {}
+
 
 @bot.event
 async def on_ready():
@@ -432,47 +438,40 @@ async def on_ready():
         print(f"❌ Sync error: {e}")
 
 
-@bot.tree.command(name="wordle", description="Bắt đầu ván Wordle mới")
-async def wordle_start(interaction: discord.Interaction):
-    uid = interaction.user.id
-    if uid in active_games and not active_games[uid]["finished"]:
-        game = active_games[uid]
-        embed = make_embed(interaction.user, game,
-            "⚠️ Bạn đang có ván dang dở! Dùng `/guess` để tiếp tục hoặc `/quit` để bỏ.",
-            discord.Color.orange())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+# ─── XỬ LÝ TIN NHẮN TRONG THREAD ────────────────────────────
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
         return
 
-    wlen = random.choice(list(WORD_LIST.keys()))
-    word = random.choice(WORD_LIST[wlen])
-    active_games[uid] = {"word": word, "guesses": [], "finished": False}
-    embed = make_embed(interaction.user, active_games[uid],
-        f"🎮 Ván mới! Từ có **{wlen}** chữ cái — có **{MAX_GUESSES}** lượt. Dùng `/guess <từ>` để đoán.",
-        discord.Color.green())
-    await interaction.response.send_message(embed=embed)
+    # Chỉ xử lý trong thread đang có ván chơi
+    if not isinstance(message.channel, discord.Thread):
+        await bot.process_commands(message)
+        return
 
+    thread_id = message.channel.id
+    if thread_id not in thread_games:
+        await bot.process_commands(message)
+        return
 
-@bot.tree.command(name="guess", description="Đoán một từ (độ dài khớp với ván hiện tại)")
-@app_commands.describe(word="Từ bạn muốn đoán")
-async def wordle_guess(interaction: discord.Interaction, word: str):
-    uid  = interaction.user.id
-    word = word.lower().strip()
+    uid = thread_games[thread_id]
+
+    # Chỉ người chơi mới được đoán
+    if message.author.id != uid:
+        return
 
     if uid not in active_games or active_games[uid]["finished"]:
-        await interaction.response.send_message(
-            "❌ Chưa có ván! Dùng `/wordle` để bắt đầu.", ephemeral=True)
         return
 
-    game   = active_games[uid]
-    wlen   = len(game["word"])
+    word = message.content.strip().lower()
+    game = active_games[uid]
+    wlen = len(game["word"])
 
-    if len(word) != wlen:
-        await interaction.response.send_message(
-            f"❌ Từ phải đúng **{wlen}** chữ cái!", ephemeral=True)
-        return
-
+    # Bỏ qua nếu không phải từ hợp lệ (có thể là lệnh slash hoặc tin nhắn khác)
     if not word.isalpha():
-        await interaction.response.send_message("❌ Chỉ dùng chữ a-z!", ephemeral=True)
+        return
+    if len(word) != wlen:
+        await message.reply(f"❌ Từ phải đúng **{wlen}** chữ cái!", mention_author=False)
         return
 
     result = evaluate_guess(game["word"], word)
@@ -480,14 +479,13 @@ async def wordle_guess(interaction: discord.Interaction, word: str):
 
     if all(r == GREEN for r in result):
         game["finished"] = True
-        tries   = len(game["guesses"])
-        pts     = lb_update_win(uid, interaction.user.display_name, tries, len(game["word"]))
-        ratings = {1:"🤯 Thiên tài!", 2:"🏆 Xuất sắc!", 3:"🎉 Tuyệt vời!",
-                   4:"😄 Tốt lắm!", 5:"😅 Suýt rồi!", 6:"😮‍💨 May mắn!"}
-        streak  = leaderboard[uid]["streak"]
+        tries     = len(game["guesses"])
+        pts       = lb_update_win(uid, message.author.display_name, tries, wlen)
+        ratings   = {1:"🤯 Thiên tài!", 2:"🏆 Xuất sắc!", 3:"🎉 Tuyệt vời!",
+                     4:"😄 Tốt lắm!", 5:"😅 Suýt rồi!", 6:"😮‍💨 May mắn!"}
+        streak    = leaderboard[uid]["streak"]
         total_pts = leaderboard[uid]["points"]
 
-        # Chi tiết điểm
         pt_lines = [f"🎯 Cơ bản: **+{pts['base']}**"]
         if pts["length"] > 0:
             pt_lines.append(f"📏 Từ dài: **+{pts['length']}**")
@@ -498,26 +496,75 @@ async def wordle_guess(interaction: discord.Interaction, word: str):
 
         msg = f"{ratings.get(tries,'👍')} Đúng rồi! Từ là **{game['word'].upper()}** — {tries}/{MAX_GUESSES} lượt!\n"
         msg += "\n".join(pt_lines)
-
-        embed = make_embed(interaction.user, game, msg, discord.Color.gold())
-        await interaction.response.send_message(embed=embed)
+        embed = make_embed(message.author, game, msg, discord.Color.gold())
+        await message.channel.send(embed=embed)
+        # Đóng thread sau khi thắng
+        await message.channel.edit(archived=True, locked=False)
+        del thread_games[thread_id]
         return
 
     if len(game["guesses"]) >= MAX_GUESSES:
         game["finished"] = True
-        lb_update_loss(uid, interaction.user.display_name)
-        embed = make_embed(interaction.user, game,
+        lb_update_loss(uid, message.author.display_name)
+        embed = make_embed(message.author, game,
             f"😞 Hết lượt! Từ đúng là **{game['word'].upper()}**. Dùng `/wordle` chơi lại.",
             discord.Color.red())
-        await interaction.response.send_message(embed=embed)
+        await message.channel.send(embed=embed)
+        await message.channel.edit(archived=True, locked=False)
+        del thread_games[thread_id]
         return
 
-    embed = make_embed(interaction.user, game,
-        f"Còn **{MAX_GUESSES - len(game['guesses'])}** lượt. Tiếp tục!",
+    embed = make_embed(message.author, game,
+        f"Còn **{MAX_GUESSES - len(game['guesses'])}** lượt. Tiếp tục gõ từ!",
         discord.Color.blurple())
-    await interaction.response.send_message(embed=embed)
+    await message.channel.send(embed=embed)
 
 
+# ─── LỆNH /wordle ─────────────────────────────────────────────
+@bot.tree.command(name="wordle", description="Bắt đầu ván Wordle mới (tạo thread riêng)")
+async def wordle_start(interaction: discord.Interaction):
+    uid = interaction.user.id
+
+    # Kiểm tra đang có ván dở
+    if uid in active_games and not active_games[uid]["finished"]:
+        await interaction.response.send_message(
+            "⚠️ Bạn đang có ván dang dở! Vào thread cũ để tiếp tục hoặc dùng `/quit` để bỏ.",
+            ephemeral=True)
+        return
+
+    # Chỉ tạo thread trong kênh text thường
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Chỉ dùng được trong kênh text thường!", ephemeral=True)
+        return
+
+    wlen = random.choice(list(WORD_LIST.keys()))
+    word = random.choice(WORD_LIST[wlen])
+    active_games[uid] = {"word": word, "guesses": [], "finished": False}
+
+    await interaction.response.defer()
+
+    # Tạo thread công khai
+    thread = await interaction.channel.create_thread(
+        name=f"🟩 Wordle của {interaction.user.display_name}",
+        type=discord.ChannelType.public_thread,
+        auto_archive_duration=60
+    )
+    thread_games[thread.id] = uid
+
+    embed = make_embed(interaction.user, active_games[uid],
+        f"🎮 Ván mới bắt đầu! Từ có **{wlen}** chữ cái — **{MAX_GUESSES}** lượt.\n"
+        f"Gõ từ bình thường vào đây để đoán!\n"
+        f"Dùng `/quit` nếu muốn bỏ cuộc.",
+        discord.Color.green())
+
+    await thread.send(f"{interaction.user.mention}", embed=embed)
+    await interaction.followup.send(
+        f"✅ Đã tạo thread cho {interaction.user.mention}! → {thread.mention}",
+        ephemeral=False)
+
+
+# ─── LỆNH /quit ───────────────────────────────────────────────
 @bot.tree.command(name="quit", description="Bỏ cuộc ván hiện tại")
 async def wordle_quit(interaction: discord.Interaction):
     uid = interaction.user.id
@@ -526,10 +573,24 @@ async def wordle_quit(interaction: discord.Interaction):
         return
     secret = active_games[uid]["word"]
     active_games[uid]["finished"] = True
+
+    # Xóa thread khỏi danh sách
+    tid = next((t for t, u in thread_games.items() if u == uid), None)
+    if tid:
+        del thread_games[tid]
+        try:
+            thread = bot.get_channel(tid)
+            if thread:
+                await thread.send(f"🏳️ **{interaction.user.display_name}** bỏ cuộc! Từ đúng là **{secret.upper()}**.")
+                await thread.edit(archived=True, locked=False)
+        except:
+            pass
+
     await interaction.response.send_message(
-        f"🏳️ **{interaction.user.display_name}** bỏ cuộc! Từ đúng là **{secret.upper()}**. Dùng `/wordle` chơi lại.")
+        f"🏳️ **{interaction.user.display_name}** bỏ cuộc! Từ đúng là **{secret.upper()}**.")
 
 
+# ─── LỆNH /hint ───────────────────────────────────────────────
 @bot.tree.command(name="hint", description="Gợi ý chữ cái đầu tiên (chỉ bạn thấy)")
 async def wordle_hint(interaction: discord.Interaction):
     uid = interaction.user.id
@@ -540,28 +601,14 @@ async def wordle_hint(interaction: discord.Interaction):
     await interaction.response.send_message(f"💡 Chữ đầu tiên là **{first}**", ephemeral=True)
 
 
-@bot.tree.command(name="wordlehelp", description="Hướng dẫn chơi Wordle")
-async def wordle_help(interaction: discord.Interaction):
-    embed = discord.Embed(title="📖 Hướng dẫn WORDLE", color=discord.Color.teal())
-    embed.add_field(name="🎯 Mục tiêu",
-        value=f"Đoán từ tiếng Anh **4-7** chữ cái trong **{MAX_GUESSES}** lượt.\nMỗi ván độ dài từ được chọn **ngẫu nhiên**!", inline=False)
-    embed.add_field(name="🎨 Màu sắc",
-        value=f"{GREEN} Đúng chữ, đúng vị trí\n{YELLOW} Đúng chữ, sai vị trí\n{BLACK} Không có trong từ",
-        inline=False)
-    embed.add_field(name="📝 Lệnh",
-        value="`/wordle` · `/guess <từ>` · `/hint` · `/quit`\n`/leaderboard` · `/mystats` · `/wordlehelp`", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-
+# ─── LỆNH /leaderboard ────────────────────────────────────────
 @bot.tree.command(name="leaderboard", description="Xem bảng xếp hạng Wordle")
 async def wordle_leaderboard(interaction: discord.Interaction):
     if not leaderboard:
         await interaction.response.send_message("📭 Chưa có ai chơi cả! Dùng `/wordle` để bắt đầu.", ephemeral=True)
         return
 
-    # Xếp theo tổng điểm
     sorted_lb = sorted(leaderboard.items(), key=lambda x: -x[1]["points"])
-
     medals = ["🥇", "🥈", "🥉"]
     lines  = []
     for i, (uid, p) in enumerate(sorted_lb[:10]):
@@ -595,6 +642,7 @@ async def wordle_leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+# ─── LỆNH /mystats ────────────────────────────────────────────
 @bot.tree.command(name="mystats", description="Xem thống kê cá nhân của bạn")
 async def wordle_mystats(interaction: discord.Interaction):
     uid = interaction.user.id
@@ -610,7 +658,6 @@ async def wordle_mystats(interaction: discord.Interaction):
     avg     = f"{p['total_guesses']/wins:.1f}" if wins > 0 else "—"
     best    = p["best"] if p["best"] < 999 else "—"
 
-    # Xếp hạng theo điểm
     sorted_lb = sorted(leaderboard.items(), key=lambda x: -x[1]["points"])
     rank = next((i+1 for i, (u, _) in enumerate(sorted_lb) if u == uid), "?")
 
@@ -632,6 +679,21 @@ async def wordle_mystats(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+# ─── LỆNH /wordlehelp ─────────────────────────────────────────
+@bot.tree.command(name="wordlehelp", description="Hướng dẫn chơi Wordle")
+async def wordle_help(interaction: discord.Interaction):
+    embed = discord.Embed(title="📖 Hướng dẫn WORDLE", color=discord.Color.teal())
+    embed.add_field(name="🎯 Mục tiêu",
+        value=f"Đoán từ tiếng Anh **4-7** chữ cái trong **{MAX_GUESSES}** lượt.\nMỗi ván độ dài từ được chọn **ngẫu nhiên**!", inline=False)
+    embed.add_field(name="🎮 Cách chơi",
+        value="1. Dùng `/wordle` để tạo thread\n2. Gõ từ thẳng vào thread — không cần lệnh!\n3. Mọi người có thể vào xem và cổ vũ", inline=False)
+    embed.add_field(name="🎨 Màu sắc",
+        value=f"{GREEN} Đúng chữ, đúng vị trí\n{YELLOW} Đúng chữ, sai vị trí\n{BLACK} Không có trong từ",
+        inline=False)
+    embed.add_field(name="📝 Lệnh",
+        value="`/wordle` · `/hint` · `/quit`\n`/leaderboard` · `/mystats` · `/wordlehelp`", inline=False)
+    await interaction.response.send_message(embed=embed)
+
 
 # ─── CHẠY ────────────────────────────────────────────────────
-    bot.run(TOKEN)
+bot.run(TOKEN)
