@@ -279,7 +279,7 @@ WORD_LIST = {
         "tangled", "texture", "theater", "through", "toppled", "tourist", "towards", "tragedy", "triumph", "trouble",
         "turnout", "typical", "uncover", "uniform", "unknown", "unusual", "venture", "village", "warrior", "welcome",
         "western", "whereas", "wishing", "wonders", "working", "written", "younger",
-    ],   
+    ],
 }
 GREEN  = "🟩"
 YELLOW = "🟨"
@@ -634,4 +634,4 @@ async def wordle_mystats(interaction: discord.Interaction):
 
 
 # ─── CHẠY ────────────────────────────────────────────────────
-bot.run(TOKEN)
+    bot.run(TOKEN)
